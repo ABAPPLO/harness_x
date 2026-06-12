@@ -37,14 +37,15 @@ def _get_agent():
     global _agent
     if _agent is not None:
         return _agent
+    import os
     from run_agent import AIAgent
     from harness_cli.config import load_config
 
     config = load_config()
     _agent = AIAgent(
-        base_url=config.get("base_url", ""),
-        model=config.get("model", "gpt-4o"),
-        api_key=config.get("api_key", ""),
+        base_url=config.get("base_url", "") or os.environ.get("HARNESS_BASE_URL", ""),
+        model=config.get("model", "gpt-4o") if isinstance(config.get("model"), str) and config.get("model") else os.environ.get("HARNESS_MODEL", "gpt-4o"),
+        api_key=config.get("api_key", "") or os.environ.get("HARNESS_API_KEY", ""),
         quiet_mode=True,
     )
     return _agent
