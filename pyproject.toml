@@ -52,4 +52,4 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "tools*", "harness_cli*", "gateway*"]
+include = ["agent*", "tools*", "harness_cli*", "gateway*", "plugins*", "providers*"]

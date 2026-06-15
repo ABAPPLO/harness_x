@@ -141,6 +141,25 @@ print(response)
 | `HARNESS_MODEL` | 默认模型名 | `gpt-4o` |
 | `HERMES_HOME` | 兼容旧变量（HARNESS_* 优先） | — |
 
+## 内置插件
+
+harness_x 保留了 hermes-agent 的插件加载器（`harness_cli/plugins.py`，manifest + `register(ctx)` 接口），并内置以下 8 类插件。第三方 SDK 均为 lazy import，未安装时优雅降级（`FeatureUnavailable`）。
+
+| 类别 | 插件 | 说明 |
+|------|------|------|
+| 基础设施 | `context_engine` | 第三方上下文引擎发现（替代内置 ContextCompressor） |
+| 基础设施 | `memory` | 跨会话记忆提供者（honcho/mem0/supermemory 等 8 后端） |
+| 基础设施 | `model-providers` | 28 个模型提供者（anthropic/gemini/deepseek/openrouter/xai 等） |
+| 基础设施 | `observability` | 可观测性（langfuse / nemo_relay） |
+| 浏览器 | `browser` | 浏览器自动化（browserbase / browser_use / firecrawl） |
+| Web 搜索 | `web` | 7 个搜索引擎（brave/ddgs/exa/firecrawl/searxng/tavily/xai）+ parallel 聚合 |
+| 安全/工具 | `security-guidance` | 文件写入后检测 25 种危险模式，非阻塞回传模型自纠 |
+| 安全/工具 | `disk-cleanup` | 自动清理会话临时文件 |
+
+**未包含**（重度耦合已剥离的 CLI/仪表盘子系统）：kanban、dashboard_auth、hermes-achievements、消息平台适配器、技能包、前端。
+
+插件加载顺序：bundled（`plugins/`）→ user（`~/.harness_x/plugins/`）→ project（`./.hermes/plugins/`，opt-in）→ pip entry-point。
+
 ## 与 hermes-agent 的关系
 
 | 维度 | hermes-agent | harness_x |
