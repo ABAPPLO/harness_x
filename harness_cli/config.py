@@ -5835,6 +5835,27 @@ def get_env_value(key: str) -> Optional[str]:
     return env_vars.get(key)
 
 
+def env_value(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Config-aware env read — like ``os.getenv``, but also honors the Harness
+    ``.env`` file (``~/.harness_x/.env``) and values set via ``hermes config set``.
+
+    Never raises; returns ``default`` (None by default) when the key is unset
+    or unreadable. Plugins and tools should use this instead of ``os.getenv``
+    so credentials configured through the config layer are visible to
+    ``is_available()`` (otherwise a config-only key silently leaves the
+    auto-detect cascade and reports the backend as unavailable).
+
+    This is the single source of truth for config-aware env reads — the
+    per-provider ``_env()`` shims and ``tools.web_tools._env_value`` delegate
+    here rather than re-implementing the fallback.
+    """
+    try:
+        val = get_env_value(key)
+    except Exception:
+        val = os.getenv(key)
+    return val if val is not None else default
+
+
 # =============================================================================
 # Config display
 # =============================================================================

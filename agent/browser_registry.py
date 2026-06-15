@@ -123,7 +123,7 @@ class _BrowserRegistry(ProviderRegistry[BrowserProvider]):
         #    auto-eligible. Filtered by availability so we don't surface a
         #    provider the user has no credentials for. See docstring for why
         #    we do NOT fall back to "any single-eligible registered provider".
-        for legacy in _legacy_preference():
+        for legacy in self._legacy_preference("browser", _LEGACY_PREFERENCE):
             provider = snapshot.get(legacy)
             if provider is not None and self._is_available_safe(provider):
                 return provider
@@ -180,44 +180,6 @@ def _reset_for_tests() -> None:
 # ---------------------------------------------------------------------------
 # Active-provider resolution
 # ---------------------------------------------------------------------------
-
-def _read_config_list(*path: str) -> Optional[tuple]:
-    """Resolve a list-of-strings config key from ``config.yaml``.
-
-    Returns a lowercased, stripped tuple, or None on miss / non-list /
-    read error. Used for the overridable ``browser.legacy_preference`` list.
-    """
-    try:
-        from harness_cli.config import load_config
-
-        cfg = load_config()
-        cur = cfg
-        for segment in path:
-            if not isinstance(cur, dict):
-                return None
-            cur = cur.get(segment)
-        if isinstance(cur, (list, tuple)):
-            cleaned = tuple(
-                str(x).strip().lower() for x in cur if str(x).strip()
-            )
-            return cleaned if cleaned else None
-    except Exception as exc:
-        logger.debug("Could not read config %s: %s", ".".join(path), exc)
-    return None
-
-
-def _legacy_preference() -> tuple:
-    """Legacy auto-detect order for browser providers.
-
-    Overridable via ``browser.legacy_preference`` (a YAML list of provider
-    names) in ``config.yaml``; defaults to :data:`_LEGACY_PREFERENCE`. The
-    module constant stays the documented default so existing installs with no
-    config key keep landing on the same provider; the override lets a user
-    reorder auto-detection without editing code.
-    """
-    override = _read_config_list("browser", "legacy_preference")
-    return override if override else _LEGACY_PREFERENCE
-
 
 def _resolve(configured: Optional[str]) -> Optional[BrowserProvider]:
     """Resolve the active browser provider (module-level convenience).

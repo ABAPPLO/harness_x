@@ -29,7 +29,6 @@ Auth env vars (one of)::
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import uuid
 from typing import Any, Dict, Optional
@@ -47,13 +46,9 @@ def _env(key: str, default: str | None = None) -> str | None:
     credentials configured through the config layer are visible to
     ``is_available()``.
     """
-    try:
-        from harness_cli.config import get_env_value
+    from harness_cli.config import env_value
 
-        val = get_env_value(key)
-    except Exception:
-        val = os.getenv(key)
-    return val if val is not None else default
+    return env_value(key, default)
 
 
 # Idempotency tracking for managed-mode session creation. The managed Nous

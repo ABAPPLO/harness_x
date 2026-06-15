@@ -119,15 +119,9 @@ def _env_value(name: str) -> str:
     a config-only ``SEARXNG_URL`` (or any provider key) leaves the backend
     auto-detect cascade and ``check_web_api_key()`` blind to it. See #34290.
     """
-    try:
-        from harness_cli.config import get_env_value
+    from harness_cli.config import env_value
 
-        val = get_env_value(name)
-    except Exception:
-        val = None
-    if val is None:
-        val = os.getenv(name, "")
-    return (val or "").strip()
+    return (env_value(name, "") or "").strip()
 
 
 def _has_env(name: str) -> bool:
@@ -863,19 +857,29 @@ def web_search_tool(query: str, limit: int = 5) -> str:
         # delegation. Sync only — every provider's search() is sync.
         _ensure_web_plugins_loaded()
         from agent.web_search_registry import (
-            get_active_search_provider,
             get_provider as _wsp_get_provider,
         )
 
         backend = _get_search_backend()
         provider = _wsp_get_provider(backend) if backend else None
-        if provider is None or not provider.supports_search():
-            # Fall back to availability-walked active provider when the
-            # configured backend isn't a registered search provider (typo,
-            # uninstalled plugin, or capability mismatch).
-            provider = get_active_search_provider()
 
-        if provider is None:
+        if backend and provider is None:
+            # Explicit config named a backend that isn't registered (typo, or
+            # its plugin failed to load). Surface it instead of silently
+            # switching to whatever the availability walk would pick — the
+            # "explicit config wins" contract means an unresolvable explicit
+            # name is an error, not a fallback hint.
+            response_data = {
+                "success": False,
+                "error": (
+                    f"Configured web search backend '{backend}' is not "
+                    "available (typo, or its plugin failed to load). Fix "
+                    "web.search_backend / web.backend in config, or run "
+                    "`hermes tools`."
+                ),
+            }
+        elif provider is None:
+            # No explicit config and the registry auto-detect found nothing.
             response_data = {
                 "success": False,
                 "error": (
@@ -1004,44 +1008,59 @@ async def web_extract_tool(
             # provider itself for the firecrawl per-URL loop).
             _ensure_web_plugins_loaded()
             from agent.web_search_registry import (
-                get_active_extract_provider,
                 get_provider as _wsp_get_provider,
             )
 
             provider = _wsp_get_provider(backend) if backend else None
-            if provider is None or not provider.supports_extract():
-                # When the configured name IS registered but doesn't support
-                # extract (search-only providers like brave-free / ddgs /
-                # searxng), surface that as a typed "search-only" error
-                # rather than silently switching backends. When the name
-                # isn't registered at all (typo / uninstalled plugin), fall
-                # through to the active-provider walk.
-                if provider is not None and not provider.supports_extract():
-                    return json.dumps(
-                        {
-                            "success": False,
-                            "error": (
-                                f"{provider.display_name} is a search-only "
-                                "backend and cannot extract URL content. "
-                                "Set web.extract_backend to firecrawl, "
-                                "tavily, exa, or parallel."
-                            ),
-                        },
-                        ensure_ascii=False,
-                    )
-                provider = get_active_extract_provider()
-                if provider is None:
-                    return json.dumps(
-                        {
-                            "success": False,
-                            "error": (
-                                "No web extract provider configured. "
-                                "Set web.extract_backend to firecrawl, "
-                                "tavily, exa, or parallel."
-                            ),
-                        },
-                        ensure_ascii=False,
-                    )
+
+            if backend and provider is None:
+                # Explicit config named a backend that isn't registered (typo,
+                # or its plugin failed to load). Surface it instead of silently
+                # switching — the "explicit config wins" contract means an
+                # unresolvable explicit name is an error, not a fallback hint.
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            f"Configured web extract backend '{backend}' is "
+                            "not available (typo, or its plugin failed to "
+                            "load). Fix web.extract_backend / web.backend in "
+                            "config, or run `hermes tools`."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+            if provider is not None and not provider.supports_extract():
+                # The configured name IS registered but is search-only
+                # (brave-free / ddgs / searxng) — it cannot extract. Surface
+                # that as a typed error rather than silently switching to an
+                # extract-capable backend.
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            f"{provider.display_name} is a search-only "
+                            "backend and cannot extract URL content. "
+                            "Set web.extract_backend to firecrawl, "
+                            "tavily, exa, or parallel."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+            if provider is None:
+                # No explicit config and the registry auto-detect found
+                # nothing extract-capable.
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            "No web extract provider configured. "
+                            "Set web.extract_backend to firecrawl, "
+                            "tavily, exa, or parallel."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
 
             logger.info(
                 "Web extract via %s: %d URL(s)", provider.name, len(safe_urls)

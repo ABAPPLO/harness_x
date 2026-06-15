@@ -131,6 +131,45 @@ class ProviderRegistry(Generic[T]):
         with self._lock:
             self._providers.clear()
 
+    # ── shared config helpers (used by subclass _resolve) ─────────────────────
+
+    def _read_config_list(self, *path: str) -> Optional[list]:
+        """Resolve a list-of-strings config key from ``config.yaml``.
+
+        Returns a lowercased, stripped tuple, or None on miss / non-list /
+        read error. Shared by both registries' ``<section>.legacy_preference``
+        override lookups so the dotted-walk + normalization lives once.
+        """
+        try:
+            from harness_cli.config import load_config
+
+            cfg = load_config()
+            cur = cfg
+            for segment in path:
+                if not isinstance(cur, dict):
+                    return None
+                cur = cur.get(segment)
+            if isinstance(cur, (list, tuple)):
+                cleaned = [
+                    str(x).strip().lower() for x in cur if str(x).strip()
+                ]
+                return cleaned if cleaned else None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not read config %s: %s", ".".join(path), exc)
+        return None
+
+    def _legacy_preference(self, section: str, default: tuple) -> tuple:
+        """Legacy auto-detect order, overridable via ``<section>.legacy_preference``
+        (a YAML list of provider names) in ``config.yaml``.
+
+        *default* is the subclass's ``_LEGACY_PREFERENCE`` constant; the module
+        constant stays the documented default so existing installs with no
+        config key keep landing on the same provider, while the override lets a
+        user reorder auto-detection without editing code.
+        """
+        override = self._read_config_list(section, "legacy_preference")
+        return override if override else default
+
     # ── selection (subsystem-specific — override in subclass) ────────────────
 
     def _resolve(self, configured: Optional[str], **kwargs: object) -> Optional[T]:
