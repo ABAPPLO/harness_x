@@ -130,7 +130,7 @@ class _WebSearchRegistry(ProviderRegistry[WebSearchProvider]):
         if len(eligible) == 1:
             return eligible[0]
 
-        for legacy in _legacy_preference():
+        for legacy in self._legacy_preference("web", _LEGACY_PREFERENCE):
             provider = snapshot.get(legacy)
             if (
                 provider is not None
@@ -210,48 +210,10 @@ def _read_config_key(*path: str) -> Optional[str]:
                 return None
             cur = cur.get(segment)
         if isinstance(cur, str) and cur.strip():
-            return cur.strip()
+            return cur.strip().lower()
     except Exception as exc:
         logger.debug("Could not read config %s: %s", ".".join(path), exc)
     return None
-
-
-def _read_config_list(*path: str) -> Optional[tuple]:
-    """Resolve a list-of-strings config key from ``config.yaml``.
-
-    Returns a lowercased, stripped tuple, or None on miss / non-list /
-    read error. Used for the overridable ``web.legacy_preference`` list.
-    """
-    try:
-        from harness_cli.config import load_config
-
-        cfg = load_config()
-        cur = cfg
-        for segment in path:
-            if not isinstance(cur, dict):
-                return None
-            cur = cur.get(segment)
-        if isinstance(cur, (list, tuple)):
-            cleaned = tuple(
-                str(x).strip().lower() for x in cur if str(x).strip()
-            )
-            return cleaned if cleaned else None
-    except Exception as exc:
-        logger.debug("Could not read config %s: %s", ".".join(path), exc)
-    return None
-
-
-def _legacy_preference() -> tuple:
-    """Legacy auto-detect order for web providers.
-
-    Overridable via ``web.legacy_preference`` (a YAML list of provider names)
-    in ``config.yaml``; defaults to :data:`_LEGACY_PREFERENCE`. The override
-    lets a user reorder (or narrow) auto-detection without editing code, while
-    the module constant remains the documented default so existing installs
-    with no config key keep landing on the same provider.
-    """
-    override = _read_config_list("web", "legacy_preference")
-    return override if override else _LEGACY_PREFERENCE
 
 
 def get_active_search_provider() -> Optional[WebSearchProvider]:

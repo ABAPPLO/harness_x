@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from agent.web_search_provider import WebSearchProvider
@@ -61,13 +60,9 @@ def _env(key: str, default: str | None = None) -> str | None:
     falling back to raw process env. Drop-in for ``os.getenv`` so credentials
     configured through the config layer are visible to ``is_available()``.
     """
-    try:
-        from harness_cli.config import get_env_value
+    from harness_cli.config import env_value
 
-        val = get_env_value(key)
-    except Exception:
-        val = os.getenv(key)
-    return val if val is not None else default
+    return env_value(key, default)
 
 
 # ---------------------------------------------------------------------------

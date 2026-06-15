@@ -224,14 +224,34 @@ class ProviderProfile:
             logger.debug("fetch_models(%s): network/HTTP error: %s", self.name, exc)
             return None
         except ValueError as exc:
-            # httpx raises a plain ValueError for some transport
-            # misconfigurations (e.g. unsupported proxy scheme). Treat as an
-            # unreachable endpoint, not a parse failure.
+            # httpx raises a plain ValueError for proxy misconfigurations the
+            # request can't be sent under (e.g. an ``ALL_PROXY=socks://`` with
+            # an unsupported/missing scheme). urllib silently ignored such
+            # proxies and connected directly; honor that behavior by retrying
+            # once with proxies/env disabled (trust_env=False) so a broken
+            # proxy env var doesn't silently kill live model discovery for
+            # every provider.
             logger.debug(
-                "fetch_models(%s): request misconfiguration (%s): %s",
+                "fetch_models(%s): proxy/env misconfiguration (%s); retrying "
+                "direct (trust_env=False): %s",
                 self.name, url, exc,
             )
-            return None
+            try:
+                with httpx.Client(
+                    timeout=timeout, follow_redirects=True, trust_env=False
+                ) as client:
+                    resp = client.get(url, headers=headers)
+                    resp.raise_for_status()
+            except httpx.HTTPError as exc2:
+                logger.debug(
+                    "fetch_models(%s): direct retry also failed: %s",
+                    self.name, exc2,
+                )
+                return None
+            except ValueError:
+                # Still misconfigured even without env (shouldn't happen for a
+                # bare GET, but keep the "never raise" contract airtight).
+                return None
 
         # 2xx response in hand — parse it. A decode failure here is a real
         # signal that base_url is wrong (e.g. a parked domain returning HTML
