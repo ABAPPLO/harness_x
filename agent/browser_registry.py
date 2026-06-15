@@ -1,0 +1,229 @@
+"""
+Browser Provider Registry
+=========================
+
+Central map of registered cloud browser providers. Populated by plugins at
+import-time via :meth:`PluginContext.register_browser_provider`; consumed by
+the ``browser_*`` cloud-mode tool dispatch to route each call to the active
+backend.
+
+The shared register/list/get/availability bookkeeping lives on the generic
+:class:`agent.provider_registry.ProviderRegistry` base; this module keeps only
+the browser-specific selection policy (``local`` short-circuit + legacy
+preference walk, deliberately no single-eligible shortcut and no capability
+split).
+
+Active selection
+----------------
+The active provider is chosen by configuration with this precedence:
+
+1. ``browser.cloud_provider`` in ``config.yaml`` (explicit override).
+2. Legacy preference order — ``browser-use`` → ``browserbase`` — filtered by
+   availability. Matches the historic auto-detect order in
+   :func:`tools.browser_tool._get_cloud_provider` (Browser Use checked first
+   because it covers both the managed Nous gateway and direct API key path;
+   Browserbase as the older direct-credentials fallback). ``firecrawl`` is
+   intentionally NOT in the legacy walk — users only get Firecrawl as a
+   cloud browser when they explicitly set ``browser.cloud_provider:
+   firecrawl``, matching pre-migration behaviour where Firecrawl was never
+   auto-selected.
+3. Otherwise ``None`` — the dispatcher falls back to local browser mode.
+
+The explicit-config branch (rule 1) intentionally ignores ``is_available()``
+so the dispatcher surfaces a typed "X_API_KEY is not set" error to the user
+instead of silently switching backends. Matches the legacy
+:func:`tools.browser_tool._get_cloud_provider` behaviour for configured names.
+
+Note: there is no "capability" split here (unlike the web subsystem, which
+has search/extract/crawl). Every browser provider implements the full
+:class:`agent.browser_provider.BrowserProvider` lifecycle; the registry's
+job is purely selection, not capability routing.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from agent.browser_provider import BrowserProvider
+from agent.provider_registry import ProviderRegistry
+
+logger = logging.getLogger(__name__)
+
+
+class _BrowserRegistry(ProviderRegistry[BrowserProvider]):
+    """Browser cloud-provider registry.
+
+    ``log_unavailable_as_warning`` is True (matching the original module,
+    which logged ``is_available`` failures at WARNING) — a browser backend
+    whose probe raises is unusual enough to surface, unlike the web subsystem
+    where a probe failure is a routine fallback.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(provider_label="Browser", log_unavailable_as_warning=True)
+
+    def _resolve(
+        self,
+        configured: Optional[str],
+        **_kwargs: object,
+    ) -> Optional[BrowserProvider]:
+        """Resolve the active browser provider.
+
+        Resolution rules (in order):
+
+        1. **Explicit "local".** Returns None — the dispatcher disables cloud
+           mode entirely. Mirrors legacy short-circuit in
+           :func:`tools.browser_tool._get_cloud_provider`.
+        2. **Explicit config wins, ignoring availability.** If ``configured``
+           names a registered provider, return it even if its
+           :meth:`is_available` returns False — the dispatcher will surface a
+           precise "X_API_KEY is not set" error instead of silently routing
+           somewhere else.
+        3. **Legacy preference walk, filtered by availability.** Walk
+           :data:`_LEGACY_PREFERENCE` (``browser-use`` → ``browserbase``)
+           looking for a provider whose ``is_available()`` is True.
+
+        There is intentionally NO "single-eligible shortcut" rule here (unlike
+        :func:`agent.web_search_registry._resolve`). Pre-migration, the
+        auto-detect branch in ``tools.browser_tool._get_cloud_provider`` only
+        considered Browser Use and Browserbase; Firecrawl was reachable only
+        via an explicit ``browser.cloud_provider: firecrawl`` config key.
+        Preserving that gate matters because Firecrawl shares its API key with
+        the *web* extract plugin (``plugins/web/firecrawl/``), so users who set
+        ``FIRECRAWL_API_KEY`` for web extract must NOT get silently routed to a
+        paid cloud browser on a fresh install. Third-party browser-provider
+        plugins added under ``~/.hermes/plugins/browser/<vendor>/`` are subject
+        to the same gate — they must be explicitly configured to take effect.
+
+        Returns None when no provider is configured AND no available provider
+        matches the legacy preference; the dispatcher then falls back to local
+        browser mode.
+        """
+        snapshot = self._snapshot()
+
+        # 1. Explicit "local" short-circuit.
+        if configured == "local":
+            return None
+
+        # 2. Explicit config wins — return regardless of is_available() so the
+        #    user gets a precise downstream error message rather than a silent
+        #    backend switch. Matches _get_cloud_provider() in browser_tool.py.
+        if configured:
+            provider = snapshot.get(configured)
+            if provider is not None:
+                return provider
+            logger.debug(
+                "browser cloud_provider '%s' configured but not registered; "
+                "falling back to auto-detect",
+                configured,
+            )
+
+        # 3. Legacy preference walk — only providers in _LEGACY_PREFERENCE are
+        #    auto-eligible. Filtered by availability so we don't surface a
+        #    provider the user has no credentials for. See docstring for why
+        #    we do NOT fall back to "any single-eligible registered provider".
+        for legacy in _legacy_preference():
+            provider = snapshot.get(legacy)
+            if provider is not None and self._is_available_safe(provider):
+                return provider
+
+        return None
+
+
+# Legacy auto-detect order — used when no ``browser.cloud_provider`` is set.
+# Matches the pre-migration walk in :func:`tools.browser_tool._get_cloud_provider`.
+# Firecrawl is intentionally absent so users with ``FIRECRAWL_API_KEY`` set
+# for web-extract don't get silently routed to a paid cloud browser. See
+# :func:`_resolve` for the full rationale.
+_LEGACY_PREFERENCE = (
+    "browser-use",
+    "browserbase",
+)
+
+
+# Module-level singleton — all public functions below delegate to it so
+# existing callers (PluginContext.register_browser_provider, the browser
+# tool dispatcher) keep the same import surface.
+_registry = _BrowserRegistry()
+
+
+# ---------------------------------------------------------------------------
+# Public module API (unchanged surface, delegates to the singleton)
+# ---------------------------------------------------------------------------
+
+def register_provider(provider: BrowserProvider) -> None:
+    """Register a cloud browser provider.
+
+    Re-registration (same ``name``) overwrites the previous entry and logs
+    a debug message — makes hot-reload scenarios (tests, dev loops) behave
+    predictably.
+    """
+    _registry.register_provider(provider, expected_type=BrowserProvider)
+
+
+def list_providers():  # type: ignore[no-untyped-def]
+    """Return all registered providers, sorted by name."""
+    return _registry.list_providers()
+
+
+def get_provider(name: str) -> Optional[BrowserProvider]:
+    """Return the provider registered under *name*, or None."""
+    return _registry.get_provider(name)
+
+
+def _reset_for_tests() -> None:
+    """Clear the registry. **Test-only.**"""
+    _registry._reset_for_tests()
+
+
+# ---------------------------------------------------------------------------
+# Active-provider resolution
+# ---------------------------------------------------------------------------
+
+def _read_config_list(*path: str) -> Optional[tuple]:
+    """Resolve a list-of-strings config key from ``config.yaml``.
+
+    Returns a lowercased, stripped tuple, or None on miss / non-list /
+    read error. Used for the overridable ``browser.legacy_preference`` list.
+    """
+    try:
+        from harness_cli.config import load_config
+
+        cfg = load_config()
+        cur = cfg
+        for segment in path:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(segment)
+        if isinstance(cur, (list, tuple)):
+            cleaned = tuple(
+                str(x).strip().lower() for x in cur if str(x).strip()
+            )
+            return cleaned if cleaned else None
+    except Exception as exc:
+        logger.debug("Could not read config %s: %s", ".".join(path), exc)
+    return None
+
+
+def _legacy_preference() -> tuple:
+    """Legacy auto-detect order for browser providers.
+
+    Overridable via ``browser.legacy_preference`` (a YAML list of provider
+    names) in ``config.yaml``; defaults to :data:`_LEGACY_PREFERENCE`. The
+    module constant stays the documented default so existing installs with no
+    config key keep landing on the same provider; the override lets a user
+    reorder auto-detection without editing code.
+    """
+    override = _read_config_list("browser", "legacy_preference")
+    return override if override else _LEGACY_PREFERENCE
+
+
+def _resolve(configured: Optional[str]) -> Optional[BrowserProvider]:
+    """Resolve the active browser provider (module-level convenience).
+
+    ``configured`` is the value read from ``browser.cloud_provider`` by the
+    dispatcher. Delegates to the singleton so the selection logic lives in
+    exactly one place (:meth:`_BrowserRegistry._resolve`).
+    """
+    return _registry._resolve(configured)

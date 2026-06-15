@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-Harness X — 简易 Web 聊天界面
+Harness X — 简易 Web 聊天界面（测试 / 演示用途）
+
+⚠️ 非生产代码：单用户、进程内会话、无认证、无并发保护。仅用于在浏览器中
+快速测试 harness_x 的对话效果。生产部署请用 CLI (python __main__.py) 或
+自行接入网关。
+
+构造的 AIAgent 与 CLI 走同一条 init_agent 路径（base_url/model/api_key +
+默认 toolset），并额外支持 HARNESS_* 环境变量覆盖，因此测得的对话效果与
+CLI 一致。
 
 用法:
     python web_chat.py                # 启动服务器 (默认 http://127.0.0.1:8080)
@@ -233,14 +241,24 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, 500)
                 return
 
-        response_text = result.get("final_response", str(result))
-        new_history = result.get("messages", [])
+        # run_conversation omits 'final_response' on error/partial-exit paths
+        # (context overflow, max-retries exhausted, compression failure) — it
+        # returns {messages, completed:False, error, ...} instead. Don't
+        # str()-dump the whole stats dict into the chat reply, and don't
+        # persist those internal messages (they hold retry scaffolding /
+        # partial tool calls that would poison the next turn's history).
+        final = result.get("final_response")
+        if final is None:
+            err = result.get("error") or "Agent did not produce a final response."
+            sid = session_id or str(uuid.uuid4())[:8]
+            self._send_json({"error": err, "session_id": sid}, 500)
+            return
 
         if not session_id:
             session_id = str(uuid.uuid4())[:8]
 
-        _sessions[session_id] = new_history
-        self._send_json({"response": response_text, "session_id": session_id})
+        _sessions[session_id] = result.get("messages", [])
+        self._send_json({"response": final, "session_id": session_id})
 
     def _handle_reset(self, data: dict):
         session_id = data.get("session_id")
